@@ -9,7 +9,7 @@ per AGENTS.md §5 once populated — link out to the full page for the
 "why," keep this page for the "what command."
 
 1. Connection — see [01-postgresql-cli/](01-postgresql-cli/)
-2. psql meta-commands — see [16-command-reference/psql.md](16-command-reference/psql.md)
+2. psql meta-commands — see [01-postgresql-cli/commands.md](01-postgresql-cli/commands.md); for `psql` CLI flags used in scripts, see [16-command-reference/psql.md](16-command-reference/psql.md)
 3. Database — see [03-database-design/](03-database-design/)
 4. Users/Roles — see [06-security/roles.md](06-security/roles.md)
 5. Tables — see [03-database-design/](03-database-design/)
