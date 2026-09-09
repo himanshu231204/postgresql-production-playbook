@@ -1,0 +1,22 @@
+# Sample ~/.psqlrc — safe, useful defaults for interactive psql sessions.
+# Copy the lines you want into your own ~/.psqlrc; this file is not loaded
+# automatically. Contains no connection info or credentials.
+
+-- Show how long each statement took. Leave this on during any production
+-- investigation — query latency is often the first clue.
+\timing on
+
+-- Display NULL explicitly instead of an empty string, so you can tell
+-- NULL apart from an empty value at a glance.
+\pset null '[NULL]'
+
+-- Expanded output automatically when a row would be wider than the
+-- terminal, instead of always toggling \x by hand.
+\x auto
+
+-- Include the current database and user in the prompt, so a pasted
+-- terminal screenshot or scrollback shows which server you were on.
+\set PROMPT1 '%n@%/%R%# '
+
+-- Keep a persistent history file per-database instead of one shared file.
+\set HISTFILE ~/.psql_history-:DBNAME
