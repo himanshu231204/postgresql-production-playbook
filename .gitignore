@@ -1,0 +1,22 @@
+# Secrets: never commit real credentials (commit .env.example instead)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/*
+!secrets/README.md
+!secrets/*.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local data and backups
+*.dump
+*.sql.gz
+pgdata/

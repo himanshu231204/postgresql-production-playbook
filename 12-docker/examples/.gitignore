@@ -1,0 +1,7 @@
+# Real credentials never get committed
+.env
+.env.*
+!.env.example
+secrets/*
+!secrets/README.md
+!secrets/postgres_password.txt.example

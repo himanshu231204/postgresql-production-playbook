@@ -1,73 +1,98 @@
 # macOS Command Reference
 
-Commands below assume a Homebrew install (`brew install postgresql@16`),
-the common case for local development on macOS. For the *why* behind
-service management and connecting, see
-[01-postgresql-cli/commands.md](../01-postgresql-cli/commands.md) — this
-page is the fast lookup, organized by OS instead of by topic.
+All commands here are **Unix shell** (zsh, the macOS default, or bash)
+unless marked `psql` or SQL. Primary install path covered: Homebrew
+(`postgresql@16`). Postgres.app and the EDB installer manage the server
+differently; see the end of the page.
 
-## Service management
+Validation status: documentation-verified, not executed (no macOS host).
+`lsof`, `nc`, `pg_isready`, `pg_ctl`, `psql` syntax was executed on Linux with
+the same flags; Homebrew paths and `brew services` come from the Homebrew
+documentation. Cross-OS comparison: [README.md](README.md).
 
-| Task | Command | Notes |
+## Install and PATH
+
+| Command | Purpose | Notes |
 |---|---|---|
-| List installed/managed services | `brew services list` | Shows every Homebrew-managed background service, not just PostgreSQL |
-| Check status | `brew services info postgresql@<ver>` | Does not confirm the server accepts connections — use `pg_isready` |
-| Start | `brew services start postgresql@<ver>` | Registers with `launchd` so it also starts at login |
-| Stop | `brew services stop postgresql@<ver>` | Drops every open connection |
-| Restart | `brew services restart postgresql@<ver>` | |
-| Run in the foreground (no `launchd` registration) | `postgres -D /opt/homebrew/var/postgresql@<ver>` | Useful for seeing startup errors directly in the terminal |
+| `brew install postgresql@16` | Install the server and client tools | Pick the major version deliberately; versioned formulae are "keg-only" |
+| `brew --prefix postgresql@16` | Print the install prefix | `/opt/homebrew/opt/postgresql@16` on Apple silicon, `/usr/local/opt/postgresql@16` on Intel |
+| `echo 'export PATH="$(brew --prefix postgresql@16)/bin:$PATH"' >> ~/.zshrc` | Put `psql`, `pg_dump`, `pg_ctl` on `PATH` | Needed because versioned formulae are not linked into `/opt/homebrew/bin` |
+| `psql --version` | Confirm client version | Use a client at least as new as the server for `pg_dump` |
 
-## Environment variables
+## Service control (Homebrew)
 
-| Task | Command | Notes |
+| Task | Command | Production Notes |
 |---|---|---|
-| Set for the current session only | `export PGHOST=localhost` | Lost when the terminal closes |
-| Set persistently | Add the `export` line to `~/.zshrc` (zsh, the default shell since macOS Catalina) or `~/.bash_profile` (bash) | Takes effect in **new** shells, or run `source ~/.zshrc` |
-| Read a variable | `echo $PGHOST` | |
+| List services | `brew services list` | Status column: `started`, `stopped`, `error` |
+| Status | `brew services info postgresql@16` | Does not prove connections work: `pg_isready` |
+| Start | `brew services start postgresql@16` | Registers a launchd agent and starts at login |
+| Stop | `brew services stop postgresql@16` | Disconnects clients |
+| Restart | `brew services restart postgresql@16` | Drops all connections |
+| Reload config | `pg_ctl reload -D "$(brew --prefix)/var/postgresql@16"` | Or SQL `SELECT pg_reload_conf();` |
+| Run once, not as a service | `pg_ctl -D "$(brew --prefix)/var/postgresql@16" -l "$(brew --prefix)/var/log/postgresql@16.log" start` | Stop with `pg_ctl ... stop -m fast`. Do not mix with `brew services` on the same data directory |
+| Server status via `pg_ctl` | `pg_ctl -D "$(brew --prefix)/var/postgresql@16" status` | |
 
-**Production note:** don't `export PGPASSWORD` in a shell profile — it's
-readable by anything running as that user and shows up in `ps` for any
-subprocess that inherits it. Use `~/.pgpass` (`chmod 600`) or a secrets
-manager; see
+Homebrew defaults: data directory `$(brew --prefix)/var/postgresql@16`,
+log `$(brew --prefix)/var/log/postgresql@16.log`, role named after your macOS
+user (no `postgres` superuser unless you create it), trust-style local
+authentication. This is a development setup, not a production hardening
+baseline ([06-security/](../06-security/)). Production databases do not run
+on a laptop.
+
+## Logs
+
+| Command | Purpose | Notes |
+|---|---|---|
+| `tail -f "$(brew --prefix)/var/log/postgresql@16.log"` | Follow the server log | |
+| `grep -iE 'fatal\|error' "$(brew --prefix)/var/log/postgresql@16.log" \| tail -20` | Recent errors | |
+
+## Network checks
+
+| Command | Purpose | Notes |
+|---|---|---|
+| `lsof -nP -iTCP:5432 -sTCP:LISTEN` | Who listens on 5432 | Shows `postgres ... 127.0.0.1:5432 (LISTEN)` (verified syntax on Linux; same flags on macOS `lsof`) |
+| `nc -zv localhost 5432` | TCP reachability | `succeeded!` = port open, not that PostgreSQL authenticates |
+| `pg_isready -h localhost -p 5432` | Server accepting connections | Exit 0 = yes |
+| `ps aux \| grep '[p]ostgres'` | Server processes | Shows the `-D` data directory |
+
+## Environment variables and passwords
+
+```bash
+export PGHOST=localhost PGPORT=5432 PGUSER=app_rw PGDATABASE=appdb
+psql -X -c "SELECT current_user, current_database();"
+```
+
+Add non-secret variables to `~/.zshrc`. Passwords go in `~/.pgpass` with
+`chmod 600 ~/.pgpass` (format `host:port:database:user:password`). Do not
+set `PGPASSWORD` inline: it reaches shell history and the process
+environment. See
 [06-security/passwords-and-secrets.md](../06-security/passwords-and-secrets.md).
 
-## Network diagnostics
+## Common tasks
 
-```bash
-nc -zv HOST 5432
-```
+| Command | Purpose | Notes |
+|---|---|---|
+| `createdb appdb` | Create a database as your macOS user's role | **Shell command**, not SQL |
+| `dropdb appdb` | Drop it | **Destructive**: confirm `psql -l` first; take a `pg_dump` |
+| `psql -d postgres -c '\l'` | List databases | `\l` is a psql meta-command |
+| `pg_dump -Fc -d appdb -f ~/backups/appdb.dump` | Backup | Flags in [pg-dump.md](pg-dump.md) |
 
-`-z` scans without sending data, `-v` prints whether the connection
-succeeded. This only confirms the TCP port is reachable — it doesn't mean
-PostgreSQL itself is healthy. Compare against `pg_isready`, which checks
-the PostgreSQL process specifically (see
-[01-postgresql-cli/commands.md](../01-postgresql-cli/commands.md#checking-connectivity)).
+## Other installs
 
-## Running `psql`, `pg_dump`, `pg_restore`
+| Install | Binaries | Service |
+|---|---|---|
+| Postgres.app | `/Applications/Postgres.app/Contents/Versions/latest/bin` (add to `PATH`) | Start/stop in the app; no `brew services` |
+| EDB installer | `/Library/PostgreSQL/16/bin` | launchd; `pg_ctl` against `/Library/PostgreSQL/16/data` |
+| Docker Desktop | n/a on host | Use [docker.md](docker.md); the host port mapping is `-p 5432:5432` |
 
-Homebrew's versioned PostgreSQL formulas are not linked onto `PATH` by
-default (to avoid colliding with other versions). Either run
-`brew link postgresql@<ver>` or reference the binaries directly:
+## Troubleshooting
 
-```bash
-$(brew --prefix postgresql@16)/bin/psql -h localhost -U app_user -d app_db
-```
+| Symptom | Check | Fix |
+|---|---|---|
+| `psql: command not found` | `PATH` | Add `$(brew --prefix postgresql@16)/bin` |
+| `connection refused` | `brew services list`; log file | `brew services start postgresql@16`; read the log |
+| `FATAL: role "postgres" does not exist` | Homebrew creates a role for your macOS user | `psql -d postgres` as yourself, or `createuser -s postgres` for dev only |
+| Service shows `error` after a crash or force quit | Server log; leftover `postmaster.pid` in the data directory | Confirm no postgres process (`ps`), read the log, then `brew services restart postgresql@16` |
+| Port already in use | `lsof -nP -iTCP:5432 -sTCP:LISTEN` | Another instance (Postgres.app or Docker) holds 5432; change `port` or stop it |
 
-See [psql.md](psql.md), [pg-dump.md](pg-dump.md), and
-[pg-restore.md](pg-restore.md) for the flags themselves.
-
-## Docker
-
-Docker Desktop for Mac is required (there's no native Linux container
-runtime on macOS). Once running, `docker`/`docker compose` commands are
-identical to Linux — see [docker.md](docker.md). The official
-`postgres` image publishes both `amd64` and `arm64` builds, so Apple
-Silicon doesn't need an emulated platform for it.
-
-## Common mistakes
-
-- Assuming `psql` is on `PATH` right after `brew install` — versioned
-  formulas usually aren't linked automatically.
-- Forgetting the version suffix in `brew services` commands
-  (`postgresql@16`, not `postgresql`) when multiple versions are
-  installed.
+Related: [psql.md](psql.md), [01-postgresql-cli/commands.md](../01-postgresql-cli/commands.md).
