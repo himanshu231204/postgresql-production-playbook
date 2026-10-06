@@ -1,77 +1,113 @@
 # Linux Command Reference
 
-Commands below assume a systemd-based distro (Ubuntu, Debian, RHEL/Rocky,
-Fedora — the large majority of production Linux servers). For the *why*
-behind service management and connecting, see
-[01-postgresql-cli/commands.md](../01-postgresql-cli/commands.md) — this
-page is the fast lookup, organized by OS instead of by topic.
+All commands here are **Unix shell** (bash/zsh) commands unless marked
+`psql` or SQL. Service and unit names differ by distribution and packaging,
+so identify yours before copying.
 
-## Service management
+Validation status: `pg_lsclusters`, `pg_ctl`, `pg_isready`, `lsof`, `nc`,
+`ps`, `psql` were executed on Ubuntu 24.04 with PostgreSQL 16.
+`systemctl`, `journalctl`, `ss`, `pg_ctlcluster` and the RHEL commands are
+documentation-verified, not executed. Cross-OS comparison:
+[README.md](README.md).
 
-| Task | Command | Notes |
+## Which flavor am I on?
+
+| | Debian / Ubuntu (`postgresql-common`) | RHEL / Rocky / Alma / Fedora (PGDG packages) |
 |---|---|---|
-| Find the unit name | `systemctl list-units 'postgresql*'` | Distro-bundled packages often use plain `postgresql`; the official PGDG apt/yum repos use a versioned unit like `postgresql@16-main` |
-| Check status | `systemctl status postgresql` | Does not confirm the server accepts connections — use `pg_isready` |
-| Start | `sudo systemctl start postgresql` | |
-| Stop | `sudo systemctl stop postgresql` | Drops every open connection |
-| Restart | `sudo systemctl restart postgresql` | |
-| Enable at boot | `sudo systemctl enable postgresql` | |
-| Tail logs | `journalctl -u postgresql -f` | Check here before restarting — the cause of an outage is usually already logged |
-| Find the running process | `ps aux \| grep postgres` | Shows one process per backend connection plus the postmaster |
+| Service unit | `postgresql@16-main` (per cluster); `postgresql.service` is an umbrella unit | `postgresql-16` |
+| Binaries | `/usr/lib/postgresql/16/bin` (wrappers like `psql` are on `PATH`) | `/usr/pgsql-16/bin` (add to `PATH`) |
+| Data directory | `/var/lib/postgresql/16/main` | `/var/lib/pgsql/16/data` |
+| Config | `/etc/postgresql/16/main/postgresql.conf`, `pg_hba.conf` | in the data directory |
+| Log | `/var/log/postgresql/postgresql-16-main.log` and journal | journal, and `log/` in the data directory if `logging_collector` is on |
+| First-time init | cluster created on install (`pg_lsclusters`) | `sudo /usr/pgsql-16/bin/postgresql-16-setup initdb` |
+| Run as the OS user | `sudo -u postgres psql` | `sudo -u postgres psql` |
 
-## Environment variables
+Check what exists: `systemctl list-units 'postgresql*'` and
+`pg_lsclusters` (Debian family only). Do not hard-code `16`; substitute
+your major version. Official Linux packages: https://www.postgresql.org/download/linux/.
 
-| Task | Command | Notes |
+## Service control
+
+| Task | Debian / Ubuntu | RHEL family | Production Notes |
+|---|---|---|---|
+| List units | `systemctl list-units 'postgresql*'` | same | |
+| List clusters | `pg_lsclusters` | n/a | Shows version, cluster, port, status, data dir, log file |
+| Status | `systemctl status postgresql@16-main` | `systemctl status postgresql-16` | `systemctl status postgresql` (umbrella) reports "active (exited)" even if no cluster runs |
+| Start | `sudo systemctl start postgresql@16-main` | `sudo systemctl start postgresql-16` | |
+| Stop | `sudo systemctl stop postgresql@16-main` | `sudo systemctl stop postgresql-16` | Fast shutdown: rolls back open transactions and disconnects clients |
+| Restart | `sudo systemctl restart postgresql@16-main` | `sudo systemctl restart postgresql-16` | Drops all connections; apps/poolers must reconnect. Maintenance window |
+| Reload config | `sudo systemctl reload postgresql@16-main` | `sudo systemctl reload postgresql-16` | Applies `pg_hba.conf` and reloadable settings without dropping sessions. Reloading the Debian umbrella unit `postgresql` does nothing (its `ExecReload` is `/bin/true`) |
+| Enable at boot | `sudo systemctl enable postgresql` | `sudo systemctl enable postgresql-16` | |
+| Cluster-level wrapper (Debian) | `sudo pg_ctlcluster 16 main start\|stop\|restart\|reload\|status` | n/a | Same actions through `postgresql-common` |
+| Direct `pg_ctl` | `sudo -u postgres /usr/lib/postgresql/16/bin/pg_ctl -D DATADIR status` | `sudo -u postgres /usr/pgsql-16/bin/pg_ctl -D DATADIR status` | Use for non-packaged instances. Default stop mode is `fast`; `-m immediate` forces crash recovery on next start: last resort |
+
+`pg_ctl` actions: `start`, `stop`, `restart`, `reload`, `status`,
+`promote`, `logrotate`. Do not run `pg_ctl` against a data directory that
+systemd also manages.
+
+## Logs
+
+| Command | Purpose | Notes |
 |---|---|---|
-| Set for the current session only | `export PGHOST=localhost` | Lost when the shell exits |
-| Set persistently for one user | Add the `export` line to `~/.bashrc` or `~/.profile` | Takes effect in new shells, or run `source ~/.bashrc` |
-| Set system-wide | Add `PGHOST=localhost` (no `export`) to `/etc/environment` | Applies to all users; requires root; takes effect on next login |
-| Read a variable | `echo $PGHOST` | |
+| `journalctl -u postgresql@16-main -f` | Follow the Debian cluster's log | RHEL: `journalctl -u postgresql-16 -f` |
+| `journalctl -u postgresql@16-main --since "30 min ago"` | Recent window | |
+| `sudo tail -f /var/log/postgresql/postgresql-16-main.log` | Debian log file | |
+| `journalctl -u postgresql@16-main -p err` | Errors only | |
 
-**Production note:** don't put `PGPASSWORD` in `/etc/environment` or a
-shared profile — every process on the system running as that user (or, for
-`/etc/environment`, every user) can read it. Use `~/.pgpass` (`chmod 600`)
-or a secrets manager; see
-[06-security/passwords-and-secrets.md](../06-security/passwords-and-secrets.md).
+Read the log before restarting: the cause of an outage is usually already
+there. See [15-production-runbooks/database-is-down.md](../15-production-runbooks/database-is-down.md).
 
-## Network diagnostics
+## Network checks
+
+| Command | Purpose | Expected / notes |
+|---|---|---|
+| `ss -ltnp \| grep 5432` | Who is listening on TCP 5432 | Needs `sudo` to show process names. Listening only on `127.0.0.1` means `listen_addresses` excludes remote clients |
+| `lsof -nP -iTCP:5432 -sTCP:LISTEN` | Same, via `lsof` | Output shows `postgres ... TCP 127.0.0.1:5432 (LISTEN)` |
+| `ps -ef \| grep '[p]ostgres'` | Server processes | The first line shows `-D DATADIR` and port |
+| `nc -zv HOST 5432` | TCP reachability | `succeeded!` means the port is open, not that PostgreSQL authenticates you |
+| `pg_isready -h HOST -p 5432` | Server accepting connections | `HOST:5432 - accepting connections`; exit 0 |
+| `sudo ss -ltnp 'sport = :5432'` | Filter form | |
+
+Firewall: open 5432 only to application subnets; prefer private
+networking ([13-cloud-production/](../13-cloud-production/)).
+
+## Environment variables and passwords
 
 ```bash
-ss -tlnp | grep 5432   # is anything listening locally on 5432?
-nc -zv HOST 5432       # can I reach HOST:5432 from here?
+export PGHOST=HOST PGPORT=5432 PGUSER=app_rw PGDATABASE=appdb PGSSLMODE=require
+psql -X -c "SELECT current_user, current_database();"
 ```
 
-`ss -tlnp` needs to run on the database host itself; `nc -zv` runs from
-the client trying to reach it. Neither confirms PostgreSQL is healthy,
-only that the port is listening/reachable — pair with `pg_isready` (see
-[01-postgresql-cli/commands.md](../01-postgresql-cli/commands.md#checking-connectivity)).
+Persist in `~/.bashrc` / `~/.zshrc` only non-secret values. Passwords go in
+`~/.pgpass`, mode `0600`:
 
-## Running `psql`, `pg_dump`, `pg_restore`
+```bash
+printf '%s\n' 'HOST:5432:appdb:app_rw:CHANGE_ME' > ~/.pgpass && chmod 600 ~/.pgpass
+```
 
-Distro packages (`apt install postgresql-client`, `dnf install
-postgresql`) generally put these on `PATH` already. If multiple major
-versions are installed side by side (common with the PGDG repos), use the
-versioned binary explicitly, e.g. `/usr/lib/postgresql/16/bin/psql`, or
-`update-alternatives` on Debian/Ubuntu to pick a default.
+Format `host:port:database:user:password`; `*` is a wildcard. libpq ignores
+the file if permissions are wider. Never set `PGPASSWORD` inline: it is
+visible in the process environment and history. See
+[06-security/passwords-and-secrets.md](../06-security/passwords-and-secrets.md).
 
-See [psql.md](psql.md), [pg-dump.md](pg-dump.md), and
-[pg-restore.md](pg-restore.md) for the flags themselves.
+## Running tools as the postgres OS user
 
-## Docker
+| Command | Purpose | Notes |
+|---|---|---|
+| `sudo -u postgres psql` | Superuser shell via local socket (peer auth) | Prefer a scoped role for routine work: [06-security/least-privilege.md](../06-security/least-privilege.md) |
+| `sudo -u postgres createdb appdb` / `dropdb` | Create / drop a database from the shell | `dropdb` is **destructive**: confirm with `psql -l`, back up first |
+| `sudo -u postgres pg_dump -Fc -f /var/backups/appdb.dump appdb` | Backup | Make sure the target directory is writable by `postgres`; flags in [pg-dump.md](pg-dump.md) |
+| `psql -h HOST -U USER -d DBNAME` | Remote client | Needs a matching `pg_hba.conf` rule |
 
-Linux runs the Docker Engine natively — no Docker Desktop layer. Standard
-`docker`/`docker compose` commands apply directly; see [docker.md](docker.md).
-Remember to add your user to the `docker` group (`sudo usermod -aG docker
-$USER`, then re-login) if you don't want to prefix every command with
-`sudo`.
+## Troubleshooting
 
-## Common mistakes
+| Symptom | Check | Fix |
+|---|---|---|
+| `psql: ... Connection refused` | `pg_lsclusters` / `systemctl status`; `ss -ltnp \| grep 5432` | Start the cluster; check the port (a second cluster may use 5433) |
+| `could not connect to server: No such file or directory` (socket) | Socket directory differs | `psql -h /var/run/postgresql` or use `-h localhost` |
+| `Peer authentication failed for user` | Local socket uses peer auth | `sudo -u USER psql`, or connect with `-h 127.0.0.1` and a password |
+| Service "active" but clients refused | `listen_addresses`, `pg_hba.conf`, firewall | Edit config, then `systemctl reload` |
+| Debian: unit active but `pg_lsclusters` says `down` | Umbrella unit is not the cluster | Start `postgresql@16-main` |
 
-- Assuming the unit name is always `postgresql` — check with
-  `systemctl list-units 'postgresql*'` first, especially when the PGDG
-  repo is in use.
-- Opening PostgreSQL's port in the OS firewall (`ufw`/`firewalld`) without
-  also restricting it in `pg_hba.conf` — the firewall and `pg_hba.conf`
-  are independent layers; both need to be correct.
-- Editing `/etc/environment` and expecting the change to apply to
-  already-running processes or sessions.
+Related: [psql.md](psql.md), [14-observability/](../14-observability/),
+[15-production-runbooks/](../15-production-runbooks/).
