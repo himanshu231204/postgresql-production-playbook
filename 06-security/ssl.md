@@ -74,10 +74,22 @@ hostname the client connects to, and the CA certificate in
 publish their CA bundle; download and pin it (see
 [13-cloud-production/ssl-tls.md](../13-cloud-production/ssl-tls.md)).
 
-Python drivers: `psycopg`/libpq accept `sslmode` in the URL. The
-asyncpg driver exposes TLS through its own `ssl` argument rather than
-libpq's `sslmode`, so confirm the parameter name against the driver and
-SQLAlchemy dialect docs for your pinned versions before copying a URL.
+Python drivers: `psycopg`/libpq accept `sslmode` in the URL. asyncpg
+does not take libpq's `sslmode`/`sslrootcert` URL parameters (with
+SQLAlchemy's asyncpg dialect they raise `TypeError`) and its default is
+`prefer`. For `verify-full` semantics, pass an `ssl.SSLContext`:
+
+```python
+import ssl
+
+context = ssl.create_default_context(cafile="/etc/ssl/certs/db-ca.pem")
+engine = create_async_engine(DATABASE_URL, connect_args={"ssl": context})
+```
+
+`?ssl=require` encrypts without verifying the server certificate. Behavior
+checked with asyncpg 0.31 and SQLAlchemy 2.x; re-check against the
+versions you pin. See
+[08-python-fastapi/async-postgresql.md](../08-python-fastapi/async-postgresql.md).
 
 ## Verify the connection is encrypted
 
