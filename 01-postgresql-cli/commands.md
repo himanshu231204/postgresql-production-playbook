@@ -128,7 +128,7 @@ pg_isready -h HOST -p PORT
 server is accepting connections — it does not require valid login
 credentials. It's the right tool for health checks (see
 [12-docker/](../12-docker/) healthchecks and
-[scripts/health-check/](../../scripts/health-check/)).
+[scripts/health-check/](../scripts/health-check/)).
 
 | Exit code | Meaning |
 |---|---|
@@ -185,7 +185,7 @@ Agent orchestration systems that depend on PostgreSQL-backed state (see
 pre-flight check before starting a workflow step that will read or write
 that state, rather than letting the first query fail deep inside agent
 logic. The scripts in
-[scripts/health-check/](../../scripts/health-check/) build on this.
+[scripts/health-check/](../scripts/health-check/) build on this.
 
 ## Troubleshooting
 
