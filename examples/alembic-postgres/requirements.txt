@@ -1,0 +1,4 @@
+# Tested with PostgreSQL 16 and Python 3.13
+alembic==1.16.5
+SQLAlchemy==2.0.43
+asyncpg==0.30.0
